@@ -1,0 +1,44 @@
+{
+  "name": "My Team Import",
+  "import_mode": "standard",
+  "xlsx_sheet": "Sheet1",
+
+  "team": {
+    "target_key": "MYTEAM"
+  },
+
+  "projects": {
+    "source": "column:Project Name",
+    "multi_date": true,
+    "columns": {
+      "name": "Project Name",
+      "lead": "Owner",
+      "health": "Status",
+      "target_date": "Target Date",
+      "update_text": "Progress Update"
+    },
+    "health_keywords": [
+      { "keyword": "On track", "health": "onTrack" },
+      { "keyword": "At Risk", "health": "atRisk" },
+      { "keyword": "Delayed", "health": "offTrack" },
+      { "keyword": "Blocked", "health": "offTrack" },
+      { "keyword": "Done", "health": "onTrack" }
+    ],
+    "label_groups": [
+      { "group_name": "Product Area", "column": "Product Area" }
+    ],
+    "description_extras": [
+      { "column": "Impact", "label": "Impact" },
+      { "column": "Notes", "label": "Notes" }
+    ],
+    "milestone_columns": [
+      { "column": "Design Done", "name": "Design Done" },
+      { "column": "Dev Complete", "name": "Dev Complete" },
+      { "column": "Launch", "name": "Launch" }
+    ]
+  },
+
+  "issues": {
+    "enabled": false
+  }
+}
