@@ -7,7 +7,9 @@ A [Claude Code](https://claude.ai/claude-code) skill that imports projects from 
 - Reads an Excel (`.xlsx`) or CSV file
 - Maps columns to Linear fields via a JSON config
 - Creates new projects and updates existing ones (idempotent — no duplicates)
-- Adds milestones, labels, health status, progress updates, and description metadata
+- Adds milestones with **target dates pulled from the spreadsheet** (handles multi-date cells like `"Jan 2026, Done"`)
+- Detects **"Done" milestone cells** and marks them accordingly
+- Adds labels, health status, progress updates, and description metadata
 - Always runs a dry-run preview before committing changes
 
 ## Usage
@@ -103,9 +105,9 @@ For the complete config reference, see the [linear-solutions README](https://git
 
 Projects are matched by **name**. If a project with the same name already exists in Linear:
 - It is **not** duplicated
-- Its labels, milestones, content, and lead are **updated** with fresh data from the spreadsheet
+- Its labels, milestones (including dates), content, and lead are **updated** with fresh data from the spreadsheet
 
-This means you can re-run the import whenever your spreadsheet changes and it will safely sync.
+Milestones are also deduplicated by name — existing milestones get their `targetDate` updated on every run, so re-running the import keeps dates in sync as the spreadsheet changes.
 
 ## Example: FinProd Critical Path Tracker
 
