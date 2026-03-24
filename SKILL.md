@@ -134,6 +134,8 @@ If there were failures, show the error messages and suggest fixes.
 ## Notes
 
 - **No duplicates:** The script is idempotent — existing projects (matched by name) are never duplicated. Re-running updates labels, milestones, content, and links.
+- **Milestone dates:** Each milestone column pulls the latest parseable date from the cell (handles multi-date strings like `"Jan 2026, Done"`). Dates are set on both new and existing milestones every run.
+- **"Done" milestones:** Cells containing "Done" are detected as complete. The milestone's target date is still set if a date is also present in the cell.
 - **Unmatched leads:** Partial names like "John D" won't match Linear users. Full emails work best.
 - **Config docs:** See the [linear-solutions README](https://github.com/linear/linear-solutions/tree/main/scripts/projects_import) for full config reference.
 - **Multiple sheets:** Set `"xlsx_sheet": "Sheet Name"` in the config to target a specific worksheet.
