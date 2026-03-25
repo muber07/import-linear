@@ -41,6 +41,13 @@ unzip ~/linear-solutions-main.zip -d ~/
 pip3 install openpyxl
 ```
 
+Then replace the default importer with the patched version (adds milestone date sync):
+
+```bash
+cp ~/.claude/skills/import-linear/projects.py \
+   ~/linear-solutions-main/scripts/projects_import/lib/importers/projects.py
+```
+
 ### 2. Install this skill
 
 ```bash
