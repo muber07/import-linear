@@ -1,7 +1,5 @@
 """Project importer for Linear."""
 
-from datetime import datetime
-
 from ..client import LinearClient
 from ..discovery import WorkspaceConfig
 from ..utils import truncate_name, parse_date, parse_last_date, normalize_status, normalize_priority, priority_from_ranking, MAX_PROJECT_NAME_LENGTH
@@ -144,13 +142,17 @@ mutation CreateProjectMilestone(
   $name: String!,
   $projectId: String!,
   $description: String,
-  $targetDate: TimelessDate
+  $targetDate: TimelessDate,
+  $sortOrder: Float,
+  $completedAt: DateTime
 ) {
   projectMilestoneCreate(input: {
     name: $name,
     projectId: $projectId,
     description: $description,
-    targetDate: $targetDate
+    targetDate: $targetDate,
+    sortOrder: $sortOrder,
+    completedAt: $completedAt
   }) {
     success
     projectMilestone {
@@ -164,12 +166,22 @@ mutation CreateProjectMilestone(
 UPDATE_PROJECT_MILESTONE_MUTATION = """
 mutation UpdateProjectMilestone(
   $id: String!,
-  $targetDate: TimelessDate
+  $name: String,
+  $targetDate: TimelessDate,
+  $sortOrder: Float,
+  $completedAt: DateTime
 ) {
   projectMilestoneUpdate(id: $id, input: {
-    targetDate: $targetDate
+    name: $name,
+    targetDate: $targetDate,
+    sortOrder: $sortOrder,
+    completedAt: $completedAt
   }) {
     success
+    projectMilestone {
+      id
+      name
+    }
   }
 }
 """
@@ -332,34 +344,158 @@ def _add_initiative_parent(client: LinearClient, project_id: str, project_data: 
             print(f"    ⚠️ Initiative link failed: {err[:60]}")
 
 
+def _milestone_status_suffix(raw_date: str) -> str:
+    """Extract a trailing non-date status token from a milestone cell value.
+
+    When the *last* meaningful token in a multi-value cell is a non-date
+    keyword (``TBD``, ``Done``, ``Not needed``, etc.) the function returns
+    that keyword so it can be appended to the milestone name.  If the last
+    token is a parseable date, an empty string is returned.
+
+    Examples::
+
+        "Mon Mar 23, 2026", TBD    → "TBD"
+        TBD, "Mon May 25, 2026"    → ""       (date comes last)
+        Done                       → "Done"
+        Not needed                 → "Not needed"
+        "Mon Jan 19, 2026", Done   → "Done"
+        "Mon Feb 2, 2026"          → ""
+        TBD                        → "TBD"
+    """
+    from .utils import parse_date as _parse_date
+
+    if not raw_date or not raw_date.strip():
+        return ""
+
+    raw = raw_date.strip()
+
+    # Tokenize (same logic as parse_last_date in utils.py)
+    tokens = []
+    i = 0
+    while i < len(raw):
+        while i < len(raw) and raw[i] in (' ', ','):
+            i += 1
+        if i >= len(raw):
+            break
+        if raw[i] == '"':
+            end = raw.find('"', i + 1)
+            if end == -1:
+                tokens.append(raw[i + 1:].strip())
+                break
+            tokens.append(raw[i + 1:end].strip())
+            i = end + 1
+        else:
+            end = i
+            while end < len(raw) and raw[end] not in (',', '"'):
+                end += 1
+            token = raw[i:end].strip()
+            if token:
+                tokens.append(token)
+            i = end
+
+    if not tokens:
+        return ""
+
+    last_token = tokens[-1]
+    # If the last token parses to a date, there is no trailing status
+    if _parse_date(last_token) is not None:
+        return ""
+    return last_token
+
+
 def _add_milestones(client: LinearClient, project_id: str, project_data: dict):
-    """Create project milestones from milestone_columns config."""
+    """Create or update project milestones from milestone_columns config.
+
+    - New milestones are created with ``sortOrder`` matching their position
+      in the config's ``milestone_columns`` list so they appear in the
+      same order as the spreadsheet columns.
+    - Existing milestones are **updated** with the latest ``targetDate``
+      and ``sortOrder`` so re-runs keep dates in sync.
+    - When a milestone cell contains non-date text (e.g. ``TBD``,
+      ``Done``, ``Not needed``) as its last token, that text is shown as
+      a parenthetical suffix on the milestone name:
+      ``📍CP3 (TBD)``.  When the cell later gets a real date as the
+      last entry, the suffix is removed and the date is set normally.
+    """
     milestones = project_data.get("milestones", [])
     if not milestones:
         return
 
-    # Fetch existing milestones on this project for dedup
-    existing = {}
+    # Fetch existing milestones on this project for dedup.
+    # We store both the raw name and the "base name" (without any
+    # parenthetical suffix we may have added) so we can match milestones
+    # whose display name changed between runs.
+    existing = {}       # lowercase name  -> {id, name}
+    existing_base = {}  # lowercase base  -> {id, name}
     try:
         result = client.execute(FETCH_PROJECT_MILESTONES_QUERY, {"projectId": project_id})
         for node in result.get("project", {}).get("projectMilestones", {}).get("nodes", []):
-            existing[node["name"].lower()] = node["id"]
+            ms_id = node["id"]
+            ms_name = node["name"]
+            existing[ms_name.lower()] = {"id": ms_id, "name": ms_name}
+            # Strip a trailing " (…)" suffix to get the base name
+            base = ms_name
+            if " (" in base and base.endswith(")"):
+                base = base[:base.rfind(" (")]
+            existing_base[base.lower()] = {"id": ms_id, "name": ms_name}
     except Exception:
         pass
 
-    for ms in milestones:
-        ms_name = ms["name"]
-        if ms_name.lower() in existing:
+    for idx, ms in enumerate(milestones):
+        base_name = ms["name"]
+        sort_order = float(idx)
+
+        # Determine the display name: append status suffix when the last
+        # token in the cell is a non-date keyword (TBD, Done, Not needed, etc.)
+        suffix = _milestone_status_suffix(ms.get("raw_date", ""))
+        if suffix:
+            display_name = f"{base_name} ({suffix})"
+        else:
+            display_name = base_name
+
+        # "Done" marks the milestone as completed in Linear; all other values
+        # (including transitions away from Done) explicitly clear completedAt.
+        is_done = suffix.lower() == "done" if suffix else False
+        completed_at = "2000-01-01T00:00:00Z" if is_done else None
+
+        # Look up existing milestone by either its current name or the
+        # base name (handles transitions like "CP3 (TBD)" → "CP3").
+        match = (
+            existing.get(display_name.lower())
+            or existing.get(base_name.lower())
+            or existing_base.get(base_name.lower())
+        )
+
+        if match:
+            ms_id = match["id"]
+            old_name = match["name"]
+            update_vars = {"id": ms_id, "sortOrder": sort_order, "completedAt": completed_at}
+            # Rename if the display name changed
+            if old_name != display_name:
+                update_vars["name"] = display_name
+            if ms.get("target_date"):
+                update_vars["targetDate"] = ms["target_date"]
+            try:
+                result = client.execute(UPDATE_PROJECT_MILESTONE_MUTATION, update_vars)
+                if result.get("projectMilestoneUpdate", {}).get("success"):
+                    date_display = ms.get('target_date') or ms.get('raw_date', 'no date')
+                    rename_note = f" (renamed from '{old_name}')" if old_name != display_name else ""
+                    done_note = " ✓ completed" if is_done else ""
+                    print(f"    🏁 Milestone (updated): {display_name} ({date_display}){rename_note}{done_note}")
+            except Exception as e:
+                print(f"    ⚠️ Milestone update '{display_name}' failed: {str(e)[:60]}")
             continue
+
         try:
-            variables = {"name": ms_name, "projectId": project_id}
+            variables = {"name": display_name, "projectId": project_id, "sortOrder": sort_order, "completedAt": completed_at}
             if ms.get("target_date"):
                 variables["targetDate"] = ms["target_date"]
             result = client.execute(CREATE_PROJECT_MILESTONE_MUTATION, variables)
             if result.get("projectMilestoneCreate", {}).get("success"):
-                print(f"    🏁 Milestone: {ms_name} ({ms.get('target_date') or ms.get('raw_date', 'no date')})")
+                done_note = " ✓ completed" if is_done else ""
+                print(f"    🏁 Milestone: {display_name} ({ms.get('target_date') or ms.get('raw_date', 'no date')}){done_note}")
         except Exception as e:
-            print(f"    ⚠️ Milestone '{ms_name}' failed: {str(e)[:60]}")
+            print(f"    ⚠️ Milestone '{display_name}' failed: {str(e)[:60]}")
 
 
 def _add_external_links(client: LinearClient, project_id: str, project_data: dict):
@@ -452,8 +588,15 @@ def import_projects(
         print(f"[{i}/{total}] {display_name}")
         print(f"  📁 Source: {source_file}")
 
-        # Check for duplicate - get existing project ID if it exists
-        existing_project_id = workspace.existing_projects.get(full_name.strip().lower())
+        # Check for duplicate - look up by the truncated name (which is what
+        # the API actually stores) AND by the full name (for within-run dedup).
+        # This prevents duplicates when project names exceed 80 chars and get
+        # truncated on creation — without this, the next run fetches the
+        # truncated name from Linear but the CSV still has the full name.
+        existing_project_id = (
+            workspace.existing_projects.get(name.strip().lower())
+            or workspace.existing_projects.get(full_name.strip().lower())
+        )
         if existing_project_id:
             print(f"  ⏭ Skipped (already exists)")
             results["skipped"] += 1
@@ -595,6 +738,9 @@ def import_projects(
                 results["success"] += 1
                 results["created_projects"][full_name] = project_id
                 # Add to existing projects to prevent duplicates within same run
+                # Store both the truncated name (what Linear stores) and the full
+                # name (what future CSV rows will look up) to cover both paths.
+                workspace.existing_projects[name.strip().lower()] = project_id
                 workspace.existing_projects[full_name.strip().lower()] = project_id
                 
                 # Add project members via projectUpdate
@@ -908,13 +1054,10 @@ def prepare_projects_from_csv(csv_data: list, config: dict, workspace: Workspace
             ms_col = mc.get("column")
             ms_name = mc.get("name", ms_col)
             date_str = row.get(ms_col, "").strip()
-            tokens_lower = [t.strip().strip('"').lower() for t in date_str.replace('"', ' ').split(',')]
-            is_done = any(t in ("done", "✅", "shipped") for t in tokens_lower)
             milestones.append({
                 "name": ms_name,
                 "target_date": parse_last_date(date_str) if date_str else None,
                 "raw_date": date_str,
-                "is_done": is_done,
             })
         if milestones:
             project["milestones"] = milestones
@@ -1554,23 +1697,7 @@ def import_milestones(
         existing_id = proj_existing.get(truncated_name.lower()) or proj_existing.get(orig_name.lower())
         if existing_id:
             results["name_to_id"][compound_key] = existing_id
-            has_date = bool(ms.get("target_date"))
-            is_done = ms.get("is_done", False)
-            if (has_date or is_done) and not dry_run:
-                try:
-                    upd_vars = {"id": existing_id}
-                    if has_date:
-                        upd_vars["targetDate"] = ms["target_date"]
-                    upd = client.execute(UPDATE_PROJECT_MILESTONE_MUTATION, upd_vars)
-                    if upd.get("projectMilestoneUpdate", {}).get("success"):
-                        results["updated"] = results.get("updated", 0) + 1
-                        label = f"{ms.get('target_date', '')}{'  ✅' if is_done else ''}".strip()
-                        print(f"  ↻ Milestone updated: {orig_name[:50]} → {label}")
-                    client.rate_limit_delay()
-                except Exception:
-                    results["skipped"] += 1
-            else:
-                results["skipped"] += 1
+            results["skipped"] += 1
             continue
 
         name = orig_name
