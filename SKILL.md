@@ -121,6 +121,7 @@ Show a clean summary:
 
 📦 Projects:  X created, Y updated, Z skipped
 🏷️  Labels:    A groups, B labels created
+🏁 Milestones: N created, M updated
 ❌ Failures:  0
 
 ⚠️  Unmatched leads (no Linear user found):
@@ -133,9 +134,11 @@ If there were failures, show the error messages and suggest fixes.
 
 ## Notes
 
-- **No duplicates:** The script is idempotent — existing projects (matched by name) are never duplicated. Re-running updates labels, milestones, content, and links.
-- **Milestone dates:** Each milestone column pulls the latest parseable date from the cell (handles multi-date strings like `"Jan 2026, Done"`). Dates are set on both new and existing milestones every run.
-- **"Done" milestones:** Cells containing "Done" are detected as complete. The milestone's target date is still set if a date is also present in the cell.
+- **No duplicates:** The script is idempotent — existing projects (matched by name) are never duplicated, even when names exceed Linear's 80-character project name limit. Re-running updates labels, milestones, content, and links.
+- **Milestone dates:** Each milestone column pulls the latest parseable date from the cell (handles multi-date strings like `"Jan 2026, Done"`). Dates are set on both new and existing milestones every run. Re-runs update dates on existing milestones so the spreadsheet and Linear stay in sync.
+- **Milestone text status:** When a milestone cell ends with non-date text like `TBD`, `Done`, or `Not needed`, that text is shown in parentheses after the milestone name — e.g. `📍CP3 (TBD)`. When the cell is later updated with a real date as the last entry, the parenthetical is automatically removed and the date is set. This works across re-runs: the milestone is renamed as the status changes.
+- **Milestone ordering:** Milestones are created in the same order as their columns appear in the config's `milestone_columns` array (which should match the spreadsheet column order). This order is preserved on re-runs.
+- **"Done" milestones:** Cells containing "Done" mark the milestone as **completed in Linear** (`completedAt` is set). The target date is still set if a date is also present. Transitioning a cell away from "Done" (e.g. back to `TBD`) will un-complete the milestone on the next run. Other non-date text (e.g. `Cancelled`, `Shipping`, `No term sheet needed`) only affects the display name — they do not complete the milestone.
 - **Unmatched leads:** Partial names like "John D" won't match Linear users. Full emails work best.
 - **Config docs:** See the [linear-solutions README](https://github.com/linear/linear-solutions/tree/main/scripts/projects_import) for full config reference.
 - **Multiple sheets:** Set `"xlsx_sheet": "Sheet Name"` in the config to target a specific worksheet.
