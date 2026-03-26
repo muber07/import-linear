@@ -1,5 +1,6 @@
 """Project importer for Linear."""
 
+import datetime
 from ..client import LinearClient
 from ..discovery import WorkspaceConfig
 from ..utils import truncate_name, parse_date, parse_last_date, normalize_status, normalize_priority, priority_from_ranking, MAX_PROJECT_NAME_LENGTH
@@ -456,7 +457,7 @@ def _add_milestones(client: LinearClient, project_id: str, project_data: dict):
         # "Done" marks the milestone as completed in Linear; all other values
         # (including transitions away from Done) explicitly clear completedAt.
         is_done = suffix.lower() == "done" if suffix else False
-        completed_at = "2000-01-01T00:00:00Z" if is_done else None
+        completed_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if is_done else None
 
         # Look up existing milestone by either its current name or the
         # base name (handles transitions like "CP3 (TBD)" → "CP3").
