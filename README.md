@@ -1,166 +1,155 @@
-# import-linear — Claude Code Skill
+# import-linear
 
-A [Claude Code](https://claude.ai/claude-code) skill that imports projects from an Excel or CSV file into [Linear](https://linear.app) using a config-driven approach. Built on top of the [linear-solutions](https://github.com/linear/linear-solutions) `projects_import` script.
+Import and re-import projects from Google Sheets into **Linear** and **Jira** — with one command in Claude Code.
 
-## What it does
+---
 
-- Reads an Excel (`.xlsx`) or CSV file
-- Maps columns to Linear fields via a JSON config
-- Creates new projects and updates existing ones (idempotent — no duplicates)
-- Adds milestones with **target dates pulled from the spreadsheet** (handles multi-date cells like `"Jan 2026, Done"`)
-- Detects **"Done" milestone cells** and marks them accordingly
-- Adds labels, health status, progress updates, and description metadata
-- Always runs a dry-run preview before committing changes
+## How it works
 
-## Usage
+1. **Copy the template** → fill in your projects
+2. **Tell Claude** to import it → done
+3. **Re-run anytime** → it updates, never duplicates
 
-Once installed, just type in Claude Code:
+---
+
+## Step 1 — Get the Template
+
+📄 **[Open Template in Google Sheets →](https://docs.google.com/spreadsheets/d/1ZQsuwuM-njtdwyzX7qcCHG2ky6WbtVnhJD6W8z1XVhw/edit)**
+
+> File → Make a copy → rename it → start filling it in
+
+### Columns
+
+| Column | What to put |
+|---|---|
+| **Issue Type** | `Task`, `Epic`, or `Story` |
+| **Assignee** | Their email (e.g. `name@company.com`) |
+| **Sub Initiative** | Optional grouping label |
+| **Story Points** | Number (e.g. `3`) |
+| **Title** | Name of the project or issue |
+| **Start Date** | `YYYY-MM-DD` (e.g. `2026-04-01`) |
+| **Due Date** | `YYYY-MM-DD` |
+| **Blocked By** | Issue title or key that blocks this one |
+| **Blocks** | Issue title or key that this one blocks |
+| **Team** | Team name in Linear / project key in Jira |
+| **Parent Epic** | Epic title or key (for tasks/stories) |
+| **Project** | Project name |
+
+---
+
+## Step 2 — Set Up (first time only)
+
+### Install the MCPs in Claude Code
+
+Open Claude Code and run:
+
+```
+/mcp
+```
+
+Add the following servers if not already connected:
+
+| Tool | MCP Server URL |
+|---|---|
+| **Linear** | `https://mcp.linear.app/mcp` |
+| **Jira (Atlassian)** | `https://mcp.atlassian.com/v1/mcp` |
+| **Google Sheets** | `https://sheets.googleapis.com` *(via google-workspace skill)* |
+
+> In Claude Code desktop: Settings → MCP Servers → Add → paste the URL.
+
+### For Linear imports — install the script (one time)
+
+```bash
+curl -L https://github.com/linear/linear-solutions/archive/main.zip -o /tmp/linear.zip
+unzip /tmp/linear.zip -d ~/
+pip3 install openpyxl --break-system-packages -q
+```
+
+Set your Linear API key (Settings → API → Personal API keys):
+```bash
+export LINEAR_API_KEY=lin_api_xxxx
+```
+
+---
+
+## Step 3 — Import into Linear
+
+In Claude Code, just say:
 
 ```
 /import-linear
 ```
 
-Or with arguments:
+It will:
+- Find your most recent `.xlsx` in Downloads automatically
+- Show you a **dry-run preview** (what will be created/updated)
+- Ask for confirmation before making any changes
+- Re-running it later will **update** existing projects, never create duplicates
 
+**With options:**
 ```
-/import-linear --config ~/my_config.json --csv ~/data/projects.xlsx
-/import-linear --dry-run
-/import-linear --batch 5   # test with first 5 rows
-```
-
-## Installation
-
-### 1. Install the linear-solutions import script
-
-```bash
-# Download and unzip
-curl -L https://github.com/linear/linear-solutions/archive/refs/heads/main.zip -o ~/linear-solutions-main.zip
-unzip ~/linear-solutions-main.zip -d ~/
-
-# Install Python dependency for Excel support
-pip3 install openpyxl
+/import-linear --dry-run              # preview only, no changes
+/import-linear --batch 5             # test with first 5 rows
+/import-linear --xlsx ~/my/file.xlsx # use a specific file
 ```
 
-Then replace the default importer with the patched version (adds milestone date sync):
+---
 
-```bash
-cp ~/.claude/skills/import-linear/projects.py \
-   ~/linear-solutions-main/scripts/projects_import/lib/importers/projects.py
+## Step 4 — Import into Jira
+
+Make sure the **Atlassian MCP** is connected (see Step 2), then tell Claude:
+
+```
+Read my Google Sheet at https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit
+and create Jira issues in project [YOUR_PROJECT_KEY] for each row:
+- summary = Title
+- assignee = Assignee (email)
+- issuetype = Issue Type
+- story_points = Story Points
+- duedate = Due Date
+- epic link = Parent Epic
+After creating, link any Blocked By / Blocks relationships.
 ```
 
-### 2. Install this skill
+Replace `YOUR_SHEET_ID` with your sheet's ID and `YOUR_PROJECT_KEY` with your Jira project key (e.g. `FP`, `UUE`).
 
-```bash
-# Clone into your Claude Code skills directory
-git clone https://github.com/muber07/import-linear ~/.claude/skills/import-linear
-```
+**To re-import / update** — run the same prompt again. Claude will check for existing issues and update them instead of creating duplicates.
 
-Claude Code auto-discovers skills in `~/.claude/skills/` — no restart needed.
+---
 
-### 3. Set your Linear API key
+## Re-importing
 
-Get your key from Linear → **Settings → API → Personal API keys**, then either:
+Both Linear and Jira imports are **idempotent** — you can run them as many times as you want:
 
-```bash
-# Option A: env var (add to ~/.zshrc or ~/.bashrc)
-export LINEAR_API_KEY=lin_api_your_key_here
+- ✅ Existing items get **updated** (dates, assignees, status)
+- ✅ New rows get **created**
+- ✅ Nothing gets **duplicated**
 
-# Option B: pass it each time
-/import-linear --api-key lin_api_your_key_here
-```
+Just update your Google Sheet and re-run.
 
-## Config file
+---
 
-The import is driven by a JSON config that maps your spreadsheet columns to Linear fields.
+## Milestone Status (Linear only)
 
-### Minimal example
+In milestone date cells, you can add a status word after the date:
 
-```json
-{
-  "name": "My Team Import",
-  "import_mode": "standard",
-  "xlsx_sheet": "Sheet1",
+| Cell value | What happens in Linear |
+|---|---|
+| `2026-06-30` | Milestone with date |
+| `2026-06-30, Done` | Milestone marked **completed** ✓ |
+| `TBD` | Milestone named `CP1 (TBD)`, no date |
+| `Cancelled` | Milestone named `CP1 (Cancelled)` |
+| `Not needed` | Milestone named `CP1 (Not needed)` |
 
-  "team": {
-    "target_key": "MYTEAM"
-  },
+When you update the sheet (e.g. change `TBD` to a real date), re-running the import will rename the milestone automatically.
 
-  "projects": {
-    "source": "column:Project Name",
-    "columns": {
-      "name": "Project Name",
-      "lead": "Owner",
-      "health": "Status",
-      "target_date": "Target Date"
-    },
-    "health_keywords": [
-      { "keyword": "On track", "health": "onTrack" },
-      { "keyword": "At Risk", "health": "atRisk" },
-      { "keyword": "Blocked", "health": "offTrack" }
-    ]
-  },
+---
 
-  "issues": { "enabled": false }
-}
-```
+## Troubleshooting
 
-See [`configs/example_config.json`](configs/example_config.json) for a full example with milestones, label groups, and description extras.
-
-For the complete config reference, see the [linear-solutions README](https://github.com/linear/linear-solutions/tree/main/scripts/projects_import).
-
-## How deduplication works
-
-Projects are matched by **name**. If a project with the same name already exists in Linear:
-- It is **not** duplicated
-- Its labels, milestones (including dates), content, and lead are **updated** with fresh data from the spreadsheet
-
-Milestones are also deduplicated by name — existing milestones get their `targetDate` updated on every run, so re-running the import keeps dates in sync as the spreadsheet changes.
-
-## Example: FinProd Critical Path Tracker
-
-This skill was originally built to sync the FinProd project tracker from Excel into Linear. The config used:
-
-```json
-{
-  "name": "FinProd Critical Path Tracker",
-  "import_mode": "standard",
-  "xlsx_sheet": "Critical Path Dates",
-  "team": { "target_key": "FIN0" },
-  "projects": {
-    "source": "column:uPlan Project Name / Title (linked)",
-    "multi_date": true,
-    "columns": {
-      "name": "uPlan Project Name / Title (linked)",
-      "lead": "Prod Owner",
-      "health": "Status",
-      "target_date": "🚀 Target Rollout",
-      "update_text": "Progress Update - Feb '26 (Covering 01-Feb-26 to 28-Feb-26)"
-    },
-    "health_keywords": [
-      { "keyword": "On track", "health": "onTrack" },
-      { "keyword": "At Risk", "health": "atRisk" },
-      { "keyword": "Delayed", "health": "offTrack" },
-      { "keyword": "Done", "health": "onTrack" }
-    ],
-    "label_groups": [
-      { "group_name": "Product", "column": "Product" },
-      { "group_name": "Bet", "column": "Bet" }
-    ],
-    "milestone_columns": [
-      { "column": "📋 BRD Approved", "name": "📋 BRD Approved" },
-      { "column": "🔍 Partner Selected", "name": "🔍 Partner Selected" },
-      { "column": "📍CP3", "name": "📍CP3" },
-      { "column": "🛠️ Target Dev Complete", "name": "🛠️ Target Dev Complete" }
-    ]
-  },
-  "issues": { "enabled": false }
-}
-```
-
-## Requirements
-
-- [Claude Code](https://claude.ai/claude-code)
-- Python 3.7+
-- `openpyxl` (`pip3 install openpyxl`) for Excel support
-- [linear-solutions](https://github.com/linear/linear-solutions) cloned to `~/linear-solutions-main/`
-- Linear API key (Personal API key from Linear settings)
+| Problem | Fix |
+|---|---|
+| `LINEAR_API_KEY not set` | Run `export LINEAR_API_KEY=lin_api_xxxx` |
+| Assignee left blank | Use full email — partial names won't match |
+| Jira MCP not connected | `/mcp` → Add `https://mcp.atlassian.com/v1/mcp` |
+| Import created duplicates | Check project names match exactly (case-sensitive) |
